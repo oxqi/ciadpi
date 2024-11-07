@@ -23,7 +23,7 @@
     #define close(fd) closesocket(fd)
 #endif
 
-#define VERSION "14.1"
+#define VERSION "15"
 
 char ip_option[1] = "\0";
 
@@ -55,7 +55,7 @@ struct params params = {
         .sin6_family = AF_INET
     },
     .debug = 0,
-    .auto_level = 0
+    .auto_level = AUTO_NOBUFF
 };
 
 
@@ -86,14 +86,15 @@ const char help_text[] = {
     "    -K, --proto <t,h,u>       Protocol whitelist: tls,http,udp\n"
     "    -H, --hosts <file|:str>   Hosts whitelist, filename or :string\n"
     "    -V, --pf <port[-portr]>   Ports range whitelist\n"
-    "    -s, --split <n[+s]>       Split packet at n\n"
-    "                              +s - add SNI offset\n"
-    "                              +h - add HTTP Host offset\n"
-    "    -d, --disorder <n[+s]>    Split and send reverse order\n"
-    "    -o, --oob <n[+s]>         Split and send as OOB data\n"
-    "    -q, --disoob <n[+s]>      Split and send reverse order as OOB data\n"
+    "    -R, --round <num[-numr]>  Number of request to which desync will be applied\n"
+    "    -s, --split <pos_t>       Position format: offset[:repeats:skip][+flag1[flag2]]\n"
+    "                              Flags: +s - SNI offset, +h - HTTP host offset, +n - null\n"
+    "                              Additional flags: +e - end, +m - middle\n"
+    "    -d, --disorder <pos_t>    Split and send reverse order\n"
+    "    -o, --oob <pos_t>         Split and send as OOB data\n"
+    "    -q, --disoob <pos_t>      Split and send reverse order as OOB data\n"
     #ifdef FAKE_SUPPORT
-    "    -f, --fake <n[+s]>        Split and send fake packet\n"
+    "    -f, --fake <pos_t>        Split and send fake packet\n"
     "    -t, --ttl <num>           TTL of fake packets, default 8\n"
     #ifdef __linux__
     "    -k, --ip-opt[=f|:str]     IP options of fake packets\n"
@@ -105,7 +106,7 @@ const char help_text[] = {
     #endif
     "    -e, --oob-data <char>     Set custom OOB data\n"
     "    -M, --mod-http <h,d,r>    Modify HTTP: hcsmix,dcsmix,rmspace\n"
-    "    -r, --tlsrec <n[+s]>      Make TLS record at position\n"
+    "    -r, --tlsrec <pos_t>      Make TLS record at position\n"
     "    -a, --udp-fake <count>    UDP fakes count, default 0\n"
     #ifdef __linux__
     "    -Y, --drop-sack           Drop packets with SACK extension\n"
@@ -141,6 +142,7 @@ const struct option options[] = {
     {"proto",         1, 0, 'K'},
     {"hosts",         1, 0, 'H'},
     {"pf",            1, 0, 'V'},
+    {"round",         1, 0, 'R'},
     {"split",         1, 0, 's'},
     {"disorder",      1, 0, 'd'},
     {"oob",           1, 0, 'o'},
@@ -361,25 +363,63 @@ int get_default_ttl()
 }
 
 
+bool ipv6_support()
+{
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    close(fd);
+    return 1;
+}
+
+
 int parse_offset(struct part *part, const char *str)
 {
     char *end = 0;
     long val = strtol(str, &end, 0);
-    if (*end == '+') switch (*(end + 1)) {
-        case 's': 
-            part->flag = OFFSET_SNI;
-            break;
-        case 'h': 
-            part->flag = OFFSET_HOST;
-            break;
-        case 'e':
-            part->flag = OFFSET_END;
-            break;
-        default:
+    
+    while (*end == ':') {
+        long rs = strtol(end + 1, &end, 0);
+        if (rs < 0 || rs > INT_MAX) {
             return -1;
+        }
+        if (!part->r) {
+            if (!rs) 
+                return -1;
+            part->r = rs;
+        }
+        else {
+            part->s = rs;
+            break;
+        }
     }
-    else if (*end) {
-        return -1;
+    if (*end == '+') {
+        switch (*(end + 1)) {
+            case 's':
+                part->flag = OFFSET_SNI;
+                break;
+            case 'h': 
+                part->flag = OFFSET_HOST;
+                break;
+            case 'n':
+                break;
+            default:
+                return -1;
+        }
+        switch (*(end + 2)) {
+            case 'e':
+                part->flag |= OFFSET_END;
+                break;
+            case 'm':
+                part->flag |= OFFSET_MID;
+                break;
+            case 'r': //
+                part->flag |= OFFSET_RAND;
+                break;
+            case 's': //
+                part->flag |= OFFSET_START;
+        }
     }
     part->pos = val;
     return 0;
@@ -473,6 +513,9 @@ int main(int argc, char **argv)
     }
 
     params.laddr.sin6_port = htons(1080);
+    if (!ipv6_support()) {
+        params.baddr.sin6_family = AF_INET;
+    }
     
     int rez;
     int invalid = 0;
@@ -604,6 +647,9 @@ int main(int argc, char **argv)
                 }
                 end = strchr(end, ',');
                 if (end) end++;
+            }
+            if (dp->detect && params.auto_level == AUTO_NOBUFF) {
+                params.auto_level = AUTO_NOSAVE;
             }
             break;
             
@@ -823,6 +869,24 @@ int main(int argc, char **argv)
             }
             break;
             
+        case 'R':
+            val = strtol(optarg, &end, 0);
+            if (val <= 0 || val > INT_MAX)
+                invalid = 1;
+            else {
+                dp->rounds[0] = val;
+                if (*end == '-') {
+                    val = strtol(end + 1, &end, 0);
+                    if (val <= 0 || val > INT_MAX)
+                        invalid = 1;
+                }
+                if (*end)
+                    invalid = 1;
+                else
+                    dp->rounds[1] = val;
+            }
+            break;
+            
         case 'g':
             val = strtol(optarg, &end, 0);
             if (val <= 0 || val > 255 || *end)
@@ -894,7 +958,8 @@ int main(int argc, char **argv)
         clear_params();
         return -1;
     }
-
+    srand((unsigned int)time(0));
+    
     int status = run((struct sockaddr_ina *)&params.laddr);
     clear_params();
     return status;
