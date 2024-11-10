@@ -47,7 +47,7 @@ int setttl(int fd, int ttl)
 }
 
 #ifdef __linux__
-int drop_sack(int fd)
+static int drop_sack(int fd)
 {
     struct sock_filter code[] = {
         { 0x30, 0, 0, 0x0000000c },
@@ -85,7 +85,7 @@ static inline void delay(long ms)
 #endif
 
 #ifdef __linux__
-void wait_send(int sfd)
+static void wait_send(int sfd)
 {
     for (int i = 0; params.wait_send && i < 500; i++) {
         struct tcp_info tcpi = {};
@@ -122,7 +122,7 @@ void wait_send(int sfd)
 #endif
 
 #ifdef __linux__
-ssize_t send_fake(int sfd, char *buffer,
+static ssize_t send_fake(int sfd, const char *buffer,
         int cnt, long pos, struct desync_params *opt)
 {
     struct sockaddr_in6 addr = {};
@@ -234,7 +234,7 @@ ssize_t send_fake(int sfd, char *buffer,
 #ifdef _WIN32
 OVERLAPPED ov = {};
 
-ssize_t send_fake(int sfd, char *buffer,
+static ssize_t send_fake(int sfd, const char *buffer,
         int cnt, long pos, struct desync_params *opt)
 {
     struct packet pkt;
@@ -334,8 +334,8 @@ ssize_t send_fake(int sfd, char *buffer,
 }
 #endif
 
-ssize_t send_oob(int sfd, char *buffer,
-        ssize_t n, long pos, char *c)
+static ssize_t send_oob(int sfd, char *buffer,
+        ssize_t n, long pos, const char *c)
 {
     char rchar = buffer[pos];
     buffer[pos] = c[1] ? c[0] : 'a';
@@ -357,8 +357,8 @@ ssize_t send_oob(int sfd, char *buffer,
 }
 
 
-ssize_t send_disorder(int sfd, 
-        char *buffer, long pos)
+static ssize_t send_disorder(int sfd, 
+        const char *buffer, long pos)
 {
     int bttl = 1;
     
@@ -378,8 +378,8 @@ ssize_t send_disorder(int sfd,
 }
 
 
-ssize_t send_late_oob(int sfd, char *buffer,
-        ssize_t n, long pos, char *c)
+static ssize_t send_late_oob(int sfd, char *buffer,
+        ssize_t n, long pos, const char *c)
 {
     int bttl = 1;
     
@@ -427,7 +427,7 @@ static long gen_offset(long pos, int flag,
 
 
 ssize_t desync(int sfd, char *buffer, size_t bfsize,
-        ssize_t n, ssize_t offset, struct sockaddr *dst, int dp_c)
+        ssize_t n, ssize_t offset, const struct sockaddr *dst, int dp_c)
 {
     struct desync_params dp = params.dp[dp_c];
     
@@ -445,6 +445,14 @@ ssize_t desync(int sfd, char *buffer, size_t bfsize,
             LOG(LOG_S, "host: %.*s (%zd)\n",
                 len, host, host - buffer);
             host_pos = host - buffer;
+        }
+        else {
+            size_t s = n > 16 ? 16 : n - (n % 4);
+            char hex[s * 2 + 1], *b = buffer;
+            for (size_t i = 0; i < s; i += 4)
+                snprintf(hex + i * 2, sizeof(hex) - i * 2, 
+                    "%02x%02x%02x%02x", b[i],b[i+1],b[i+2],b[i+3]);
+            LOG(LOG_S, "bytes: %s (%zd)\n", s ? hex : "", n);
         }
     }
     // modify packet
@@ -591,7 +599,7 @@ int post_desync(int sfd, int dp_c)
 
 
 ssize_t desync_udp(int sfd, char *buffer, size_t bfsize,
-        ssize_t n, struct sockaddr *dst, int dp_c)
+        ssize_t n, const struct sockaddr *dst, int dp_c)
 {
     struct desync_params *dp = &params.dp[dp_c];
     

@@ -59,7 +59,7 @@ struct params params = {
 };
 
 
-const char help_text[] = {
+const static char help_text[] = {
     "    -i, --ip, <ip>            Listening IP, default 0.0.0.0\n"
     "    -p, --port <num>          Listening port, default 1080\n"
     #ifdef __linux__
@@ -83,7 +83,7 @@ const char help_text[] = {
     #ifdef TIMEOUT_SUPPORT
     "    -T, --timeout <sec>       Timeout waiting for response, after which trigger auto\n"
     #endif
-    "    -K, --proto <t,h,u>       Protocol whitelist: tls,http,udp\n"
+    "    -K, --proto <t,h,u,i>     Protocol whitelist: tls,http,udp,ipv4\n"
     "    -H, --hosts <file|:str>   Hosts whitelist, filename or :string\n"
     "    -V, --pf <port[-portr]>   Ports range whitelist\n"
     "    -R, --round <num[-numr]>  Number of request to which desync will be applied\n"
@@ -686,6 +686,9 @@ int main(int argc, char **argv)
                         break;
                     case 'u': 
                         dp->proto |= IS_UDP;
+                        break;
+                    case 'i': 
+                        dp->proto |= IS_IPV4;
                         break;
                     default:
                         invalid = 1;
